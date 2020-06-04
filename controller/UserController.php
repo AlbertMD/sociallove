@@ -1,0 +1,621 @@
+<?php
+
+namespace controller;
+
+require_once("funciones.php");
+
+use \model\Orm;
+use \dawfony\Ti;
+use model\Usuario;
+use \model\OrmPerfil;
+use model\UsuarioFace;
+
+class UserController extends Controller
+{
+    public function procesarLogin()
+    {
+        global $URL_PATH;
+        global $pass;
+
+        $usuario = new Usuario;
+        $email = $_REQUEST["email"];
+        $usuario->email = $email;
+        $usuario->password = trim($_REQUEST["password"]);
+        $checkbox = $_POST["rememberme"] ?? "";
+        $hashpass = (new Orm)->comprobarUsuario($usuario);
+        if (!password_verify($usuario->password, $hashpass["password"])) {
+            $sacarListaMenu = (new PostController)->listaMain();
+            $error_msg = "*Login o contraseña incorrecto";
+            echo Ti::render("view/principal.phtml", compact("error_msg", "sacarListaMenu"));
+        } else {
+            if ($checkbox == 'on') {
+                setcookie("usuario", trim($email), time() + (60 * 60));
+                setcookie("pass", trim($usuario->password), time() + (60 * 60)); //solo es una hora
+                /* DEJO COMENTADO QUE NO ENCUENTRO LA MANERA DE MANDAR EL PASSWORD CIFRADO
+                Y EN EL INPUT ME PONGA EL PASS ORIGINAL,POR QUE SI LO PONGO EN SESION, LUEGO AL DESCONECTAR SE BORRA.
+                HE INTENTADO PONER EL HASH PERO NO COINCIDEN,HE INTENTADO DESCIFRADO CON MD5 Y SHA1,TAMPOCO.
+                NO LLEVA MI NIVEL  HACER TANTO. */
+                session_start();
+                $_SESSION['login'] = $hashpass["login"];
+                $_SESSION['rol_id'] = $hashpass["rol"];
+                $_SESSION['fotoPerfil'] = $hashpass["foto"];
+                $_SESSION['genero'] = $hashpass["genero"];
+                $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($_SESSION["login"]);
+                $numeroNotificacionesCorreo = (new OrmPerfil)->contarNotificacionesCorreo($_SESSION["login"]);
+                $_SESSION['notificaciones'] = $numeroNotificaciones['cuenta'];
+                $_SESSION['notificacionesCorreo'] = $numeroNotificacionesCorreo['cuenta'];
+                header("Location: $URL_PATH/listado");
+            } else {
+                setcookie("usuario", "", time() - (60 * 60));
+                setcookie("pass", "", time() - (60 * 60));
+                session_start();
+                $_SESSION['login'] = $hashpass["login"];
+                $_SESSION['rol_id'] = $hashpass["rol"];
+                $_SESSION['fotoPerfil'] = $hashpass["foto"];
+                $_SESSION['genero'] = $hashpass["genero"];
+                $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($_SESSION["login"]);
+                $numeroNotificacionesCorreo = (new OrmPerfil)->contarNotificacionesCorreo($_SESSION["login"]);
+                $_SESSION['notificaciones'] = $numeroNotificaciones['cuenta'];
+                $_SESSION['notificacionesCorreo'] = $numeroNotificacionesCorreo['cuenta'];
+                header("Location: $URL_PATH/listado");
+            }
+        }
+    }
+
+    public function hacerLogout()
+    {
+        global $URL_PATH;
+        //aqui estaría la variable sesion_start();
+        session_unset();
+        session_destroy();
+        header("Location: $URL_PATH/");
+    }
+
+    /*****ALBERTO******/
+    public function formularioRegistro()
+    {
+        global $URL_PATH;
+        $sex = $_REQUEST["sex"];
+        $nombre = $_REQUEST["prenombre"] ?? "";
+        $email = $_REQUEST["email"] ?? "";
+        $prepassword = $_REQUEST["prepassword"] ?? "";
+        /* CALCULO LOS AÑOS */
+        $day = $_REQUEST["day"];
+        $month = $_REQUEST["month"];
+        $year = $_REQUEST["year"];
+        $fecha_nacimiento = $day . '-' . $month . '-' . $year;
+        $dia_actual = date("Y-m-d");
+        $edad_diff = date_diff(date_create($fecha_nacimiento), date_create($dia_actual));
+        $edad = intval($edad_diff->format('%y')); //convertimos a int
+        $data = ["sex" => $sex, "nombre" => $nombre, "email" => $email, "prepassword" => $prepassword, "edad" => $edad];
+        echo Ti::render("view/registro/registroForm.phtml", $data);
+    }
+
+    public function procesarRegistro()
+    { //POST REGISTRO
+        global $config;
+        global $URL_PATH;
+        $usuario = new Usuario;
+        $error = true;
+
+        $usuario->login = sanitizar(limpia_espacios($_POST["login"] ?? "")); //name="login"
+        $usuario->password = password_hash($_REQUEST["password"], PASSWORD_DEFAULT);
+        $repPassword =  sanitizar($_REQUEST["repassword"]);    //name="repassword" /* Esta variable no hace nada */
+        $usuario->sobreti = sanitizar($_REQUEST["sobreti"] ?? "");   //textarea sobreti
+
+        //echo '<div>Has seleccionado: '.$selected.'</div>'; //los que ha seleccionado
+
+        $usuario->nombre = sanitizar($_REQUEST["nombre"] ?? "");
+        $usuario->apellidos = sanitizar($_REQUEST["apellidos"] ?? "");
+        $usuario->edad = sanitizar($_REQUEST["edad"]);
+        $usuario->ubicacion = sanitizar($_REQUEST["ubicacion"]  ?? "");
+        $usuario->loquebuscas = sanitizar($_REQUEST["loquebuscas"]  ?? "");   //textarea sobreti
+
+        //datos que vienen desde el otro formulario
+        $usuario->email = sanitizar($_POST["email"]); //esto viene del otro form
+        $usuario->genero = sanitizar($_POST["sex"]); //esto viene del index del otro form
+        $usuario->rol_id = "1";
+        $usuario->rango_id = "0";
+        $usuario->hechizos = "3";
+        $usuario->activada = "0";
+  
+        //echo '<div>Has seleccionado: '.$selected.'</div>'; //los que ha seleccionado
+    
+        $usuario->busco = $_REQUEST["busco"];
+        //foto del usuario
+        $usuario->foto = $_FILES["foto"]["name"];
+
+
+        //comprobacion del tamaño, y la extension en php      //var_dump($usuario->foto);//var_dump($_FILES["foto"]["size"]);
+        $permitidos = array("image/jpg", "image/jpeg", "image/gif", "image/png");
+        $limite_10mb = 10000000; //10mb maximo
+
+
+        if (in_array($_FILES["foto"]["type"], $permitidos) && $_FILES["foto"]["size"] <= $limite_10mb) {
+            if ($usuario->genero = "chico") {
+                move_uploaded_file($_FILES["foto"]["tmp_name"], "assets/fotosUsuarios/fotosChicos/" . $usuario->foto); //la muevo al directorio fotosChicos
+            } else {
+                move_uploaded_file($_FILES["foto"]["tmp_name"], "assets/fotosUsuarios/fotosChicas/" . $usuario->foto); //la muevo al directorio fotosChicas
+            }
+        } else {
+            $usuario->foto = "nofoto.png";
+        }
+        if ($usuario->foto === "") { //si no se indica foto se pone una x defecto
+            $usuario->foto = "nofoto.png";
+        }
+
+
+
+        if ($error) {
+            global $URL_PATH;
+            //generamos un aleatorio para enviar el correo al usuario
+            $fecha = idate("U"); //fecha en formato int
+            $aleatorio = rand(2, 99);  //aleatorio entre 0 y 99
+            $validacion = $fecha * $aleatorio;
+
+            $insert = (new Orm)->insertarUsuario($usuario, $validacion);/* Esa variable tampoco hace nada */
+            (new OrmPerfil)->insertarDetalles($usuario->login); //Crea un login en la tabla detalles para su posterior modificacion de los detalles
+            $emaildestino = "$usuario->email"; //falta cambiarlo por  $usuario->email
+            $data = ["email" => $emaildestino];
+            $token = $validacion;
+            include('emailcfg/enviar-confirmacion.php');
+            echo Ti::render("view/registro/registroCompleto.phtml", $data);
+        }
+    }
+
+    // activacion de la cuenta despues de registrar
+    public function cuentaActivada($accionUS, $validar)
+    {
+        global $URL_PATH;
+
+        if ($accionUS == 0) {
+            $selectActivada = (new Orm)->dimeSiCuentaActivada($validar);
+            if ($selectActivada === 0) {
+                //modificar 0 por 1
+                (new Orm)->poner1Activada($validar);
+                echo Ti::render("view/registro/cuentaActivada.phtml");
+            } else {
+                header("Location: $URL_PATH/");
+            }
+        }
+
+        header("Location: $URL_PATH/");
+    }
+
+    public function dameUnAleatorio()
+    {
+        //generamos un aleatorio para enviar el correo al usuario
+        $fechaInt = idate("U"); //fecha en formato int
+        $unAleatorio = rand(2, 99);  //aleatorio entre 0 y 99
+        return $fechaInt * $unAleatorio;
+    }
+
+
+ public function callbackphp(){
+        global $URL_PATH;
+        require_once("configfb.php");
+
+        try {
+            $accessToken = $handler->getAccessToken();
+            
+            if(!$accessToken){ //si dan a cancelar volvemos al index
+                header("Location: $URL_PATH/");
+            }            
+            }catch            (\Facebook\Exceptions\FacebookResponseException $e){
+            echo "Response Exception: " . $e->getMessage();
+            exit();
+         }catch(\Facebook\Exceptions\FacebookSDKException $e){
+            echo "SDK Exception: " . $e->getMessage();
+            exit();
+         }
+        
+            /*if(!$accessToken){
+                header('Location: login.php');    
+                exit();
+            }*/
+
+        $oAuth2Client = $FBObject->getOAuth2Client();
+        if (!$accessToken->isLongLived()) {
+            // Cambiando un token de acceso de corta duración por uno de larga vida 
+            $accessToken = $oAuth2Client->getLongLivedAccesToken($accessToken);
+        }
+
+
+        $response = $FBObject->get("/me?fields=id, first_name, last_name, email, gender, birthday, location, picture.type(large)", $accessToken);
+
+        $userData = $response->getGraphNode()->asArray();
+
+        $_SESSION['userData'] = $userData;
+        $_SESSION['access_token'] = (string) $accessToken;
+
+        $fotoFB =  $_SESSION['userData']['picture']['url'];
+        $id = $_SESSION['userData']['id'];
+        $nombre = eliminar_tildes($_SESSION['userData']['first_name']);
+        $apellido = $_SESSION['userData']['last_name'];
+        $email = $_SESSION['userData']['email'];
+        $genero = $_SESSION['userData']['gender']; //cambiar male
+        $ubicacion = $_SESSION['userData']['location']['name']; //ubicacion
+
+
+
+        if ($genero === "male") {
+            $genero = "chico";
+        } elseif ($genero == "") {
+            $genero = "chico";
+        } else {
+            $genero = "chica";
+        }
+
+
+        /* edad, objeto dentro de objeto + objeto extraigo la edad */
+        $objedad = $_SESSION['userData']['birthday'];
+        $edaddecoded = json_decode(json_encode($objedad), true);
+        $stringEdad = $edaddecoded['date']; //string(26) "1984-01-13 00:00:00.000000" 
+        $anio = (int) substr($stringEdad, 0, 4);  // 1984
+        $mes = (int) substr($stringEdad, 5, 8);   // 01
+        $dia = (int) substr($stringEdad, 8, 11);  // 13
+        $fecha_nacimiento = $dia . '-' . $mes . '-' . $anio;
+        $dia_actual = date("Y-m-d");
+        $edad_diff = date_diff(date_create($fecha_nacimiento), date_create($dia_actual));
+        $edad = intval($edad_diff->format('%y')); //convertimos a int            
+        /* *** */
+        //var_dump($edad);
+        //die();
+
+        //ya tenemos sus datos           
+        //ahora habria que insertar los datos en la bd y luego logear al usuario automaticamente en la app
+        //habra que generarle una contraseña y guardarla tmbn en la bd de datos.
+        //header('Location: index.php'); aqui falla una vez logeado hay que redireccionarle al listado, mirar metodo del login de angel
+        //esto esta en index.php
+
+        if (!isset($_SESSION['access_token'])) {
+            header("Location: $URL_PATH/");
+            exit();
+        }
+
+        // CREO EL USUARIO CON LOS DATOS DE FB
+        global $config;
+        global $URL_PATH;
+        $usuario = new UsuarioFace;
+        $usuario->login = $nombre . $apellido;
+        $usuario->nombre = $nombre;
+        $usuario->apellidos = $apellido;
+        $usuario->email = $email;
+        $usuario->edad = $edad;
+        $usuario->rol_id = "1";
+        $usuario->rango_id = "0";
+        $usuario->hechizos = "3";
+        $usuario->genero = $genero;
+        
+        $usuario->ubicacion = $ubicacion;
+
+        $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($usuario->login);
+        $_SESSION['notificaciones'] = $numeroNotificaciones['cuenta'];
+
+        $usuario->activada = "1"; //este no necesita activarse ya que viene x facebook. 
+        $usuario->sobreti = "";
+        $usuario->loquebuscas = "";
+        //pass aleaorio
+        $coctel = '0123456789abcdefghijklmnopqrstuvwxyz';
+        $passAleatorio = substr(str_shuffle($coctel), 0, 10); // ej: 54esmdr0qf
+        $usuario->password = password_hash($passAleatorio, PASSWORD_DEFAULT);
+
+        // num validacion
+        $fecha = idate("U"); //fecha en formato int
+        $aleatorio = rand(2, 99); //aleatorio entre 0 y 99
+        $validacion = $fecha * $aleatorio;
+        $usuario->validacion = $validacion;
+
+        // busco 
+        if ($genero === "chico") {
+            $usuario->busco = "chica";
+        } else {
+            $usuario->busco = "chico";
+        }
+
+        // foto                    
+        $nombreDfoto =  $usuario->login . ".jpg";
+        $imagen = file_get_contents($fotoFB);
+        if ($genero === "chico") {
+            file_put_contents("assets/fotosUsuarios/fotosChicos/" . $nombreDfoto, $imagen);
+        } else {
+            file_put_contents("assets/fotosUsuarios/fotosChicas/" . $nombreDfoto, $imagen);
+        }
+        $usuario->foto_perfil = $nombreDfoto;
+
+        /* FIN DE CREAR EL USUARIO */
+
+
+        // VERIFICAMOS CON LA BD
+
+        $usuExiste = (new Orm)->comprobarUsuario($usuario); //si no existe false, si existe devuelve el objeto
+         
+        if ($usuExiste) { //si existe le logeo 
+            setcookie("usuario", trim($usuExiste["email"]), time() + (60 * 60));
+            //setcookie("pass", trim($usuario->password), time() + (60 * 60)); //solo es una hora                
+            $_SESSION['login'] = $usuExiste["login"];
+            $_SESSION['rol_id'] = $usuExiste["rol"];
+            $_SESSION['fotoPerfil'] = $usuExiste["foto"];
+            $_SESSION['genero'] = $usuExiste["genero"];
+            $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($_SESSION["login"]);
+            $numeroNotificacionesCorreo = (new OrmPerfil)->contarNotificacionesCorreo($_SESSION["login"]);
+            $_SESSION['notificaciones'] = $numeroNotificaciones['cuenta'];
+            $_SESSION['notificacionesCorreo'] = $numeroNotificacionesCorreo['cuenta'];
+            header("Location: $URL_PATH/listado");
+            exit();
+        } else { //NO existe le añado a BD y le logeo                               
+            $insert = (new Orm)->insertarUsuarioFB($usuario, $validacion);
+
+            (new OrmPerfil)->insertarDetalles($usuario->login);
+            setcookie("usuario", trim($usuExiste["email"]), time() + (60 * 60));
+            //setcookie("pass", trim($usuario->password), time() + (60 * 60)); //solo es una hora                
+            $_SESSION['login'] = $usuario->login;
+            $_SESSION['rol_id'] = $usuario->rol_id;
+            $_SESSION['fotoPerfil'] = $usuario->foto_perfil;
+            $_SESSION['genero'] = $usuario->genero;
+            $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($_SESSION["login"]);
+            $numeroNotificacionesCorreo = (new OrmPerfil)->contarNotificacionesCorreo($_SESSION["login"]);
+            $_SESSION['notificaciones'] = $numeroNotificaciones['cuenta'];
+            $_SESSION['notificacionesCorreo'] = $numeroNotificacionesCorreo['cuenta'];
+            $login = $usuario->login;
+            $activador = 1;
+            (new Orm)->debeCambiarLaClave($login, $activador); //cambie tu clave ponemos el campo en 1
+
+
+            header("Location: $URL_PATH/listado");
+            exit();
+        }
+    }
+    
+
+    /* Hacemos pasarela de pago */
+    public function procesarCompra()
+    {
+
+        $idCompra = $_REQUEST['prodId'];
+
+        //guardamos el producto elegido
+        (new Orm)->guardarPedido($_SESSION['login']);
+        $id_pedido = (new Orm)->idPedido($_SESSION['login']);
+        (new Orm)->guardarProducto($idCompra, $id_pedido["id"]);
+
+        //sacamos datos del paquete comprado
+        $datosPaquete = (new Orm)->obtenerPaquete($idCompra);
+        $importe = $datosPaquete["precio"];
+
+        //tardamos 3seg para que nos rediriga a la pasarela.
+        sleep(3);
+        $cod_comercio = 2222;
+        $cod_pedido = $idCompra;
+        $concepto = "Hechizos";
+        header("Location: http://localhost/pasarela/index.php?cod_comercio=$cod_comercio&cod_pedido=$cod_pedido&importe=$importe&concepto=$concepto");
+    }
+
+    /* devolvemos el retorno de la pasarela */
+    public function retorno()
+    {
+
+        $cod_pedido = $_REQUEST["cod_pedido"];
+        $id_pedido = (new Orm)->idDelPedido($cod_pedido);
+        $id = $id_pedido["pedido_id"];
+        $sacarDatosPedido =  (new Orm)->sacarDatosPedidoPasarela($id);
+        if ($sacarDatosPedido->pago == "ok") {
+            /* PRUEBA HECHIZOS UPDATE*/
+            $idrango = (new Orm)->hechizosrango($cod_pedido);
+            $hechizosUsuario = (new Orm)->hechizosusuario($idrango["Hechizos"], $_SESSION["login"]);
+        }
+        //enviamos la id para una vez realizada toda la transaccion se borre los datos de la BD
+        echo Ti::render("view/vip/pedido.phtml", compact("sacarDatosPedido", "id"));
+    }
+
+    /* eliminar datos */
+    public function eliminarDatos($cod_pedido)
+    {
+        global $URL_PATH;
+        (new Orm)->eliminarDatosUsuarioCompra($cod_pedido);
+        header("Location: $URL_PATH/listado");
+    }
+
+ 
+  
+ /* ANGEL PASSWORD FORGET */
+
+    /* Contraseña olvidada */
+    public function passOlvidada()
+    {
+        echo Ti::render("view/passForget/passOlvidada.phtml");
+    }
+    /* obtenemos token con el email */
+    public function restablecePass()
+    {
+        /* ENVIO DEL EMAIL */
+        $email = $_REQUEST["email"] ?? "";
+        if ($email != "") { //mail correcto pedimos token y mandamos email
+            //obtengo el token con el mail, para insertarlo en el email
+            $token = (new Orm)->obtenerNumValidacion($email);
+            $emaildestino = $email;
+            include('emailcfg/enviar-recuPass.php');
+            $data = ["email" => $email];
+            echo Ti::render("view/passForget/avisoEnvioAlCorreo.phtml", $data);
+        } else { //si el mail esta vacio retorna al captcha
+            echo Ti::render("view/passForget/passOlvidada.phtml");
+        }
+    }
+    /* restablecemos la contraseña get*/
+    public function cambioPass($validUsuario)
+    {
+        $existeNumBase = (new Orm)->existeNumValidacion($validUsuario);
+        $oldToken = $validUsuario;
+        if ($existeNumBase) {
+            $dataHide = ["oldToken" => $oldToken];
+            echo Ti::render("view/passForget/restablecerPass.phtml", $dataHide); //formulario     
+            //(new Orm)->caducidadNumValidacion($email,$newToken); NOBORRAR
+        } else {
+            global $URL_PATH;
+            header("Location: $URL_PATH/");
+        }
+    }
+
+    /* mostramos mensaje y actualizamos cambios en bd  post*/
+    public function restablecePassFin()
+    {
+        $oldToken = $_REQUEST["oldToken"] ?? "";
+        //cambio validacion    
+        $objeto = new UserController;
+        $newToken = $objeto->dameUnAleatorio();
+        (new Orm)->cambiarValidacionCB($newToken, $oldToken);
+        //cambio contraseña del $newToken
+        $newPass = $_REQUEST["password"] ?? "";
+        $newPassHash = password_hash($newPass, PASSWORD_DEFAULT);
+        (new Orm)->cambioPassword($newPassHash, $newToken);
+        echo Ti::render("view/passForget/passCambiada.phtml");
+    }   
+    
+
+
+
+   
+	
+	public function hechizosFormu($login)  {
+       global $URL_PATH;
+        $arrcompletada = (new Orm)->checkSiInvitCompletada($login);
+        $hechizos = $_SESSION['hechizos'];
+        $completada = $arrcompletada["invitaciones"]; //saco el valor del array          
+        if (!$arrcompletada) { // null = primera vez que entra; se crea el registro
+            //echo "null es la primera vez que entra el usuario, ahora lo inserto y le pongo valor 0";           
+            $invitaciones = 0;
+            (new Orm)->insertUser1vezHechizos($login,$invitaciones);
+            echo Ti::render("view/hechizos/hechizosView.phtml", compact('login', 'hechizos'));
+        } elseif ($completada == 0) { // si es 0 = formulario incompleto
+            //echo "valor 0, incompleto, mostrar formulario";
+            /* $hechizos = $_SESSION['hechizos'];   ANGEL HE TOCADO ESTO!! Y LO HE DEJADO EN COMENTARIO*/
+            echo Ti::render("view/hechizos/hechizosView.phtml", compact('login', 'hechizos'));
+        } else { // si es 1 = completado
+            echo Ti::render("view/hechizos/hechizosViewCompleto.phtml", compact('login', 'hechizos'));
+        }  
+    }
+
+    public function hechizosFormuPost(){         
+        global $URL_PATH;
+        global $config;
+        error_reporting(E_ALL ^ E_NOTICE);
+        $login = $_SESSION['login'];
+        $hechizosArray = (new Orm)->contadorHechizos($login);
+        $hechizos = $hechizosArray["hechizos"];
+        (new Orm)->updateHexizx($hechizos, $login);
+        //ahora enviamos los mails
+        $arrEmailHechizos = $_REQUEST['arrayx'] ?? "";
+        $updateEmails = implode(",", $arrEmailHechizos);
+        $invitaciones = 1;
+        (new Orm)->insertMailsUsuario($login, $updateEmails, $invitaciones);
+        $array = $arrEmailHechizos; //esta variable se inyecta en el include
+        include('emailcfg/enviar-hexizosMail.php');
+        echo Ti::render("view/hechizos/hechizosViewCompleto.phtml", compact('login'));
+    }
+    
+    public function cambiapassFBphp()
+    {
+    	global $URL_PATH;
+        global $config;
+        $login = $_SESSION['login'];
+       /* var_dump($_SESSION);
+        die();*/
+        $fotoPerfil = $_SESSION['fotoPerfil']; //
+        echo Ti::render("view/usuarioFB/cambiopassFB.phtml", compact('login','fotoPerfil'));
+    }
+    
+    public function cambiapassFinFBphp() {
+        global $URL_PATH;
+        $newPass = $_REQUEST["password"] ?? "";
+        $login = $_SESSION['login'];
+        $newPassHash = password_hash($newPass, PASSWORD_DEFAULT); //encriptamos la pass        
+        (new Orm)->cambioPasswordFace($newPassHash,$login);//cambio clave        
+        $activador = 0;
+        (new Orm)->debeCambiarLaClave($login,$activador); //aqui lo pongo a 0 desactivo el aviso
+        header("Location: $URL_PATH/listado");       
+  
+  
+  }
+    
+    
+    
+    
+    
+  /* **Carlos** */
+    public function perfil($login)
+    {
+        $title = $login;
+        $hechizos = (new Orm)->contadorHechizos($_SESSION["login"]);
+        $notificaciones = (new OrmPerfil)->notificaciones($_SESSION["login"]);
+        $numeroNotificaciones = (new OrmPerfil)->contarNotificaciones($_SESSION["login"]);
+        $perfil = (new OrmPerfil)->obtenerPerfil($login);
+        $detalles = (new OrmPerfil)->obtenerDetalles($login);
+        $perfil->hechizado = (new OrmPerfil)->leHaHechizado($login, $_SESSION["login"]); // (Hechizado, hechiza)
+        $sacarLista = (new UserController)->listaPerfil($_SESSION["login"]); //lista de usuarios que aparece en el perfil
+        $haHechizado = (new OrmPerfil)->leHaHechizado($_SESSION["login"], $login);  // para ver si has recibido un hechizo del perfil visitado
+        $botonMensaje = false;
+        if ($perfil->hechizado && $haHechizado) {
+            $botonMensaje = true;
+        }
+        echo Ti::render("view/usuarios/Perfil.phtml", compact("title", "hechizos", "perfil", "detalles", "numeroNotificaciones", "sacarLista", "botonMensaje"));
+    }
+
+    function listaPerfil($login)
+    {
+
+        $sacarListaUsuarios = (new OrmPerfil)->listadoPerfil($login);
+        $numeros = array();
+        $i = 0;
+
+        while ($i < 6) {
+
+            $num = rand(0, 23);
+
+            if (in_array($num, $numeros) === false) {
+                array_push($numeros, $num);
+                $i++;
+            }
+        }
+
+        for ($i = 0; $i < 6; $i++) {
+
+            $sacarListaPerfil[$i] = [
+                "fotos" => $sacarListaUsuarios[$numeros[$i]]->foto,
+                "login" => $sacarListaUsuarios[$numeros[$i]]->login,
+                "edad" => $sacarListaUsuarios[$numeros[$i]]->edad,
+                "genero" => $sacarListaUsuarios[$numeros[$i]]->genero,
+                "ubicacion" => $sacarListaUsuarios[$numeros[$i]]->ubicacion
+            ];
+        }
+        return $sacarListaPerfil;
+    }
+
+    public function borrarPerfil($login)
+    {
+        global $URL_PATH;
+        (new OrmPerfil)->borrarPerfil($login);
+        header("Location: $URL_PATH/");
+    }
+
+    public function notificaciones()
+    {        
+        $title = "Notificaciones";
+        $hechizos = (new Orm)->contadorHechizos($_SESSION["login"]);
+        $notificaciones = (new OrmPerfil)->notificaciones($_SESSION["login"]);        
+        
+        $usuariosNotificados = [];
+        for ($i = 0; $i < count($notificaciones); $i++) {
+            $usuariosNotificados[$i] = (new OrmPerfil)->usuariosNoti($notificaciones[$i]['dalike']);
+        }
+        echo Ti::render("view/usuarios/notificaciones.phtml", compact("title", "notificaciones", "hechizos", "usuariosNotificados"));
+    }
+
+    public function notificacionesPerfil($login)
+    {
+        $_SESSION['notificaciones'] = $_SESSION['notificaciones'] - 1;
+        (new OrmPerfil)->notificado($login, $_SESSION["login"]);
+        (new UserController)->perfil($login);
+    }
+}
+  
+   
